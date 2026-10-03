@@ -10,11 +10,9 @@ def remove_duplicates(df):
     rows_before = len(df)
     df = df.drop_duplicates()
     rows_after = len(df)
+    rows_removed = rows_before - rows_after
 
-    logger.debug(
-        f"remove_duplicates: {rows_before} → {rows_after} rows "
-        f"(removed={rows_before - rows_after})"
-    )
+    logger.debug(f"remove_duplicates: {rows_before} → {rows_after} rows (removed {rows_removed})")
     return df
 
 
@@ -24,18 +22,16 @@ def handle_missing(df, axis="rows"):
         rows_before = len(df)
         df = df.dropna(axis=0)
         rows_after = len(df)
-        logger.debug(
-            f"handle_missing: {rows_before} → {rows_after} rows "
-            f"(removed={rows_before - rows_after})"
-        )
+        rows_removed = rows_before - rows_after
+        logger.debug(f"handle_missing: {rows_before} → {rows_after} rows (removed {rows_removed})")
+
     elif axis == "columns":
-        cols_before = len(df.columns)
+        columns_before = len(df.columns)
         df = df.dropna(axis=1)
-        cols_after = len(df.columns)
-        logger.debug(
-            f"handle_missing: {cols_before} → {cols_after} columns "
-            f"(removed={cols_before - cols_after})"
-        )
+        columns_after = len(df.columns)
+        columns_removed = columns_before - columns_after
+        logger.debug(f"handle_missing: {columns_before} → {columns_after} columns (removed {columns_removed})")
+
     else:
         logger.error(f"Unsupported axis: {axis}")
         raise ValueError(f"Unsupported axis: {axis}")
@@ -45,13 +41,12 @@ def handle_missing(df, axis="rows"):
 
 def remove_outliers(df, columns, method, threshold):
     """Remove outliers from the specified numeric columns."""
-    if method not in ("iqr", "zscore"):
+    if method != "iqr" and method != "zscore":
         logger.error(f"Unsupported outlier method: {method}")
         raise ValueError(f"Unsupported outlier method: {method}")
 
-    rows_start = len(df)
-
     for column in columns:
+        # Skip columns we cannot work with
         if column not in df.columns:
             logger.warning(f"Column not found: {column}")
             continue
@@ -60,64 +55,52 @@ def remove_outliers(df, columns, method, threshold):
             logger.warning(f"Column is not numeric: {column}")
             continue
 
-        rows_before = len(df)
-        values = df[column]
-
+        # Both methods give us a lowest and a highest allowed value
         if method == "iqr":
-            # Keep values inside [Q1 - threshold*IQR, Q3 + threshold*IQR]
-            q1 = values.quantile(0.25)
-            q3 = values.quantile(0.75)
+            q1 = df[column].quantile(0.25)
+            q3 = df[column].quantile(0.75)
             iqr = q3 - q1
             lower = q1 - threshold * iqr
             upper = q3 + threshold * iqr
-            keep = values.between(lower, upper)
-            details = f"lower={lower}, upper={upper}"
         else:
-            # Keep values within `threshold` standard deviations of the mean
-            mean = values.mean()
-            std = values.std()
-            if std == 0 or pd.isna(std):
-                # Every value is the same (or there is only one), so no outliers
-                keep = pd.Series(True, index=df.index)
-            else:
-                z_scores = (values - mean) / std
-                keep = z_scores.abs() <= threshold
-            details = f"mean={mean:.2f}, std={std:.2f}"
+            mean = df[column].mean()
+            std = df[column].std()
+            lower = mean - threshold * std
+            upper = mean + threshold * std
 
-        # Missing values are not outliers; handle_missing() deals with those
-        df = df[keep | values.isna()]
+        # Keep rows inside the allowed range.
+        # Missing values are not outliers, so we keep those rows too.
+        rows_before = len(df)
+        in_range = (df[column] >= lower) & (df[column] <= upper)
+        is_missing = df[column].isna()
+        df = df[in_range | is_missing]
+        rows_removed = rows_before - len(df)
 
-        logger.debug(f"{column}: {details}, removed={rows_before - len(df)}")
+        logger.debug(f"{column}: lower={lower}, upper={upper}, removed={rows_removed}")
+        logger.debug(f"remove_outliers: method={method}, threshold={threshold}, removed={rows_removed}")
 
-    logger.debug(
-        f"remove_outliers: method={method}, threshold={threshold}, "
-        f"{rows_start} → {len(df)} rows (removed={rows_start - len(df)})"
-    )
     return df
 
 
 def process_data(df, config):
     """Apply the processing steps enabled in the configuration."""
-    processing = config["processing"]
+    settings = config["processing"]
 
     # 1. Remove duplicates
-    if processing["remove_duplicates"]:
+    if settings["remove_duplicates"]:
         df = remove_duplicates(df)
 
     # 2. Handle missing values
-    missing = processing["missing"]
-    if missing["enabled"]:
-        df = handle_missing(df, axis=missing["axis"])
+    if settings["missing"]["enabled"]:
+        axis = settings["missing"]["axis"]
+        df = handle_missing(df, axis)
 
     # 3. Remove outliers
-    outliers = processing["outliers"]
-    if outliers["enabled"]:
-        df = remove_outliers(
-            df,
-            columns=outliers["columns"],
-            method=outliers["method"],
-            threshold=outliers["threshold"],
-        )
+    if settings["outliers"]["enabled"]:
+        columns = settings["outliers"]["columns"]
+        method = settings["outliers"]["method"]
+        threshold = settings["outliers"]["threshold"]
+        df = remove_outliers(df, columns, method, threshold)
 
     return df
 
@@ -129,7 +112,7 @@ def create_cleaning_report(df_before, df_after):
     columns_before = len(df_before.columns)
     columns_after = len(df_after.columns)
 
-    return {
+    report = {
         "rows_before": rows_before,
         "rows_after": rows_after,
         "rows_removed": rows_before - rows_after,
@@ -137,3 +120,4 @@ def create_cleaning_report(df_before, df_after):
         "columns_after": columns_after,
         "columns_removed": columns_before - columns_after,
     }
+    return report
