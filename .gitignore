@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *.pyc
 
+# Virtual environment
+venv/
+.venv/
+
 # IDE
 .vscode/
 .idea/
