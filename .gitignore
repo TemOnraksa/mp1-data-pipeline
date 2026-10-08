@@ -7,6 +7,9 @@ __pycache__/
 venv/
 .venv/
 
+# Pipeline output
+output/
+
 # IDE
 .vscode/
 .idea/
